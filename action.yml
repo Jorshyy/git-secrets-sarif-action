@@ -1,0 +1,7 @@
+name: git-secrets SARIF converter
+description: Convert git-secrets output into SARIF 2.1.0
+runs:
+  using: "composite"
+  steps:
+    - run: echo "TODO: wire up converter.py"
+      shell: bash
