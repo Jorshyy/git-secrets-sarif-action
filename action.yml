@@ -1,7 +1,34 @@
-name: git-secrets SARIF converter
-description: Convert git-secrets output into SARIF 2.1.0
+name: "git-secrets SARIF converter"
+description: "Convert git-secrets scan output into SARIF 2.1.0 for GitHub Code Scanning"
+author: "Jorsh & Ian"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  input-file:
+    description: "Path to git-secrets scan output (text file)"
+    required: true
+  output-file:
+    description: "Path where the SARIF file should be written"
+    required: true
+
+outputs:
+  sarif-file:
+    description: "Path to the generated SARIF file"
+    value: ${{ inputs.output-file }}
+
 runs:
   using: "composite"
   steps:
-    - run: echo "TODO: wire up converter.py"
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Convert git-secrets output to SARIF
+      run: |
+        python3 "${{ github.action_path }}/converter.py" \
+          --input "${{ inputs.input-file }}" \
+          --output "${{ inputs.output-file }}"
       shell: bash
