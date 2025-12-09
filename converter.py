@@ -1,40 +1,83 @@
-import argparse
+#!/usr/bin/env python3
 import json
+import re
 import sys
 from pathlib import Path
 
-SARIF_VERSION = "2.1.0"
-SARIF_SCHEMA = (
-    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/"
-    "Schemata/sarif-schema-2.1.0.json"
-)
+RULE_ID = "git-secrets.detected-secret"
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Convert git-secrets output to SARIF 2.1.0"
+
+def parse_git_secrets_output(text: str):
+    """
+    Parse git-secrets output of the form:
+
+        path/to/file.py:12: SOME_SECRET="value"
+        .github/workflows/git-secrets-sarif.yml:32: git secrets --add 'DB_PASSWORD'
+
+    and convert each hit into a SARIF `result` object.
+    """
+    results = []
+
+    # Match: path:line: message
+    line_re = re.compile(
+        r"^(?P<path>.+?):(?P<line>\d+):( ?(?P<snippet>.*))?$"
     )
-    parser.add_argument("--input", required=True, help="Path to git-secrets output file")
-    parser.add_argument("--output", required=True, help="Path to SARIF file to write")
-    return parser.parse_args()
 
-def main() -> int:
-    args = parse_args()
-    input_path = Path(args.input)
-    output_path = Path(args.output)
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
 
-    if not input_path.is_file():
-        print(f"ERROR: Input file not found: {input_path}", file=sys.stderr)
-        return 1
+        # Skip empty lines and general tool messages
+        if not line:
+            continue
+        if line.startswith("Error:") or line.startswith("Possible mitigations:"):
+            continue
 
-    # Read git-secrets output
-    raw_output = input_path.read_text(encoding="utf-8", errors="replace")
+        m = line_re.match(line)
+        if not m:
+            # Not a "file:line: message" line, ignore
+            continue
 
-    # Parse into SARIF results
-    results = parse_git_secrets_output(raw_output)
+        path = m.group("path").strip()
+        line_num = int(m.group("line"))
+        snippet = (m.group("snippet") or "").strip()
+
+        if snippet:
+            message_text = snippet
+        else:
+            message_text = "Potential secret detected by git-secrets."
+
+        result = {
+            "ruleId": RULE_ID,
+            "ruleIndex": 0,
+            "level": "error",
+            "message": {"text": message_text},
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            # Use forward slashes so GitHub can resolve the file
+                            "uri": path.replace("\\", "/")
+                        },
+                        "region": {"startLine": line_num},
+                    }
+                }
+            ],
+        }
+        results.append(result)
+
+    return results
+
+
+def convert(input_path: str, output_path: str):
+    # Read the git-secrets plain-text output
+    input_text = Path(input_path).read_text(encoding="utf-8", errors="ignore")
+
+    results = parse_git_secrets_output(input_text)
 
     sarif_log = {
-        "$schema": SARIF_SCHEMA,
-        "version": SARIF_VERSION,
+        # schema URL GitHub recommends
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
         "runs": [
             {
                 "tool": {
@@ -44,7 +87,7 @@ def main() -> int:
                         "informationUri": "https://github.com/awslabs/git-secrets",
                         "rules": [
                             {
-                                "id": "git-secrets.detected-secret",
+                                "id": RULE_ID,
                                 "name": "Detected secret",
                                 "shortDescription": {
                                     "text": "Potential secret detected by git-secrets"
@@ -66,75 +109,14 @@ def main() -> int:
         ],
     }
 
-    output_path.write_text(json.dumps(sarif_log, indent=2))
-    return 0
-
-
-def parse_git_secrets_output(text: str) -> list[dict]:
-    """
-    Parse git-secrets output into a list of SARIF result objects.
-
-    Expected line format (typical):
-        path/to/file:LINE: rest of the line that matched
-
-    We split on the first two ':' characters so that extra colons in the
-    message don't break parsing.
-    """
-    results: list[dict] = []
-
-    for raw_line in text.splitlines():
-        # Skip empty / whitespace-only lines
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        # Expect "path:line:message"
-        parts = line.split(":", maxsplit=2)
-        if len(parts) < 3:
-            # Not in the expected format – log and skip
-            print(f"WARN: Skipping malformed line: {raw_line}", file=sys.stderr)
-            continue
-
-        path_str, line_str, message = parts
-
-        # Try to interpret the line number
-        try:
-            line_num = int(line_str.strip())
-        except ValueError:
-            print(f"WARN: Invalid line number in line: {raw_line}", file=sys.stderr)
-            continue
-
-        message_text = message.strip() or "Potential secret detected by git-secrets"
-
-        # Build one SARIF result
-        result = {
-            "ruleId": "git-secrets.detected-secret",
-            "level": "error",  # treat all detected secrets as high severity
-            "message": {"text": message_text},
-            "locations": [
-                {
-                    "physicalLocation": {
-                        "artifactLocation": {
-                            # Use the file path as-is; GitHub will treat this as relative to repo root
-                            "uri": path_str.strip(),
-                        },
-                        "region": {
-                            "startLine": line_num,
-                            "startColumn": 1,
-                        },
-                    }
-                }
-            ],
-            "properties": {
-                # GitHub uses this to map to severity in the UI
-                "security-severity": "9.0",
-            },
-        }
-
-        results.append(result)
-
-    return results
+    Path(output_path).write_text(
+        json.dumps(sarif_log, indent=2),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Allow local testing: python converter.py [input] [output]
+    input_file = sys.argv[1] if len(sys.argv) > 1 else "git-secrets-output.txt"
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "git-secrets-output.sarif"
+    convert(input_file, output_file)
