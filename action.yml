@@ -34,5 +34,4 @@ runs:
         python3 "${{ github.action_path }}/converter.py" \
           --input "${{ inputs.input-file }}" \
           --output "${{ inputs.output-file }}"
-        count=$(python3 - << 'PY'
       shell: bash
