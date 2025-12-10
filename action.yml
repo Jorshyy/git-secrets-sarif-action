@@ -17,6 +17,9 @@ outputs:
   sarif-file:
     description: "Path to the generated SARIF file"
     value: ${{ inputs.output-file }}
+  findings-count:
+    description: "Number of findings parsed from git-secrets output"
+    value: ${{ steps.convert.outputs.findings-count }}
 
 runs:
   using: "composite"
